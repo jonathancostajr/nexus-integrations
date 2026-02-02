@@ -14,14 +14,16 @@ export const IntegrationsCallback: React.FC = () => {
       try {
         console.log('🔄 IntegrationsCallback - Processing OAuth tokens...');
 
-        // 1. Captura o project_id passado na URL de redirecionamento
+        // 1. Captura os IDs passados na URL de redirecionamento
+        const squadId = searchParams.get('squad');
         const projectId = searchParams.get('project');
 
-        if (!projectId) {
-          console.error('❌ Project ID missing from URL');
-          throw new Error('Project ID não encontrado na URL de redirecionamento.');
+        if (!squadId || !projectId) {
+          console.error('❌ Squad ID or Project ID missing from URL');
+          throw new Error('Squad ID ou Project ID não encontrado na URL de redirecionamento.');
         }
 
+        console.log('✓ Squad ID:', squadId);
         console.log('✓ Project ID:', projectId);
 
         // 2. Extrai tokens do hash da URL (Google OAuth retorna no hash)
@@ -52,7 +54,7 @@ export const IntegrationsCallback: React.FC = () => {
 
           if (session?.provider_token) {
             console.log('✓ Got token from Supabase session');
-            return handleSessionToken(session.provider_token, session.provider_refresh_token || '', projectId);
+            return handleSessionToken(session.provider_token, session.provider_refresh_token || '', squadId, projectId);
           }
 
           throw new Error('Nenhum token de acesso encontrado na URL ou sessão.');
@@ -94,7 +96,7 @@ export const IntegrationsCallback: React.FC = () => {
         // Aguarda 2 segundos para o usuário ver a mensagem
         setTimeout(() => {
           console.log('🔀 Redirecting to integrations page...');
-          navigate(`/projects/${projectId}/integrations`);
+          navigate(`/squads/${squadId}/projects/${projectId}/integrations`);
         }, 2000);
 
       } catch (error) {
@@ -104,10 +106,11 @@ export const IntegrationsCallback: React.FC = () => {
         setMessage(error instanceof Error ? error.message : 'Erro ao processar autenticação.');
 
         // Redireciona de volta após 3 segundos
+        const squadId = searchParams.get('squad');
         const projectId = searchParams.get('project');
         setTimeout(() => {
-          if (projectId) {
-            navigate(`/projects/${projectId}/integrations`);
+          if (squadId && projectId) {
+            navigate(`/squads/${squadId}/projects/${projectId}/integrations`);
           } else {
             navigate('/squads');
           }
@@ -115,7 +118,7 @@ export const IntegrationsCallback: React.FC = () => {
       }
     };
 
-    const handleSessionToken = async (accessToken: string, refreshToken: string, projectId: string) => {
+    const handleSessionToken = async (accessToken: string, refreshToken: string, squadId: string, projectId: string) => {
       try {
         setMessage('Salvando credenciais da sessão...');
 
@@ -141,7 +144,7 @@ export const IntegrationsCallback: React.FC = () => {
         setMessage('Google Analytics conectado com sucesso!');
 
         setTimeout(() => {
-          navigate(`/projects/${projectId}/integrations`);
+          navigate(`/squads/${squadId}/projects/${projectId}/integrations`);
         }, 2000);
       } catch (error) {
         throw error;

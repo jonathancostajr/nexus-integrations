@@ -14,7 +14,7 @@ interface GA4Property {
 }
 
 export const Integrations: React.FC = () => {
-  const { projectId } = useParams();
+  const { squadId, projectId } = useParams();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -217,8 +217,8 @@ export const Integrations: React.FC = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          // NEW: Redirect to dedicated callback route with project ID in query params
-          redirectTo: `${window.location.origin}/#/integrations/callback?project=${projectId}`,
+          // NEW: Redirect to dedicated callback route with squad and project IDs in query params
+          redirectTo: `${window.location.origin}/#/integrations/callback?squad=${squadId}&project=${projectId}`,
           queryParams: {
             access_type: 'offline',
             prompt: 'consent', // Force consent screen to get refresh token
