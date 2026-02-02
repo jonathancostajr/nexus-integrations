@@ -11,51 +11,82 @@ export const AuthCallback: React.FC = () => {
     useEffect(() => {
         const handleCallback = async () => {
             try {
-                // Extract parameters from both query string and hash
-                const queryParams = new URLSearchParams(window.location.search);
-                const hashParams = new URLSearchParams(window.location.hash.substring(1));
+                console.log('=== AUTH CALLBACK DEBUG ===');
+                console.log('Full URL:', window.location.href);
+                console.log('Location Hash:', window.location.hash);
+                console.log('Location Search:', window.location.search);
 
-                // Check for OAuth errors first (can be in either location)
-                const oauthError = queryParams.get('error') || hashParams.get('error');
-                const oauthErrorDesc = queryParams.get('error_description') || hashParams.get('error_description');
+                const fullUrl = window.location.href;
 
-                if (oauthError) {
-                    console.error('OAuth Error:', oauthError, oauthErrorDesc);
-                    throw new Error(oauthErrorDesc || oauthError || 'OAuth authentication failed');
+                // Check for OAuth errors first
+                if (fullUrl.includes('error=') || fullUrl.includes('error_description=')) {
+                    const errorMatch = fullUrl.match(/error=([^&]+)/);
+                    const errorDescMatch = fullUrl.match(/error_description=([^&]+)/);
+                    const errorMsg = errorDescMatch ? decodeURIComponent(errorDescMatch[1]) : (errorMatch ? errorMatch[1] : 'OAuth error');
+                    console.error('OAuth Error in URL:', errorMsg);
+                    throw new Error(errorMsg);
                 }
 
-                // Try to get code from query params first (standard OAuth), then hash
-                let code = queryParams.get('code') || hashParams.get('code');
+                // Manual token extraction - handle double hash problem
+                let accessToken: string | null = null;
+                let refreshToken: string | null = null;
+                let code: string | null = null;
 
-                // Try to get access_token from hash (implicit flow fallback)
-                const accessToken = hashParams.get('access_token');
+                // Method 1: Try to extract access_token from URL (implicit flow)
+                if (fullUrl.includes('access_token=')) {
+                    const accessTokenMatch = fullUrl.match(/access_token=([^&]+)/);
+                    if (accessTokenMatch) {
+                        accessToken = accessTokenMatch[1];
+                        console.log('✓ Found access_token in URL');
+                    }
+                }
 
-                console.log('Auth Callback - Debug Info:', {
-                    hasCode: !!code,
+                // Method 2: Try to extract refresh_token from URL
+                if (fullUrl.includes('refresh_token=')) {
+                    const refreshTokenMatch = fullUrl.match(/refresh_token=([^&]+)/);
+                    if (refreshTokenMatch) {
+                        refreshToken = refreshTokenMatch[1];
+                        console.log('✓ Found refresh_token in URL');
+                    }
+                }
+
+                // Method 3: Try to extract code from URL (PKCE flow)
+                if (fullUrl.includes('code=')) {
+                    const codeMatch = fullUrl.match(/code=([^&]+)/);
+                    if (codeMatch) {
+                        code = codeMatch[1];
+                        console.log('✓ Found code in URL');
+                    }
+                }
+
+                console.log('Extracted tokens:', {
                     hasAccessToken: !!accessToken,
-                    queryString: window.location.search,
-                    hash: window.location.hash
+                    hasRefreshToken: !!refreshToken,
+                    hasCode: !!code
                 });
 
-                if (code) {
-                    console.log('Processing PKCE code exchange...');
+                // Strategy 1: If we have access_token and refresh_token, use setSession
+                if (accessToken && refreshToken) {
+                    console.log('Using setSession with extracted tokens...');
 
-                    // Exchange code for session using PKCE
-                    const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+                    const { data, error: setSessionError } = await supabase.auth.setSession({
+                        access_token: accessToken,
+                        refresh_token: refreshToken
+                    });
 
-                    if (exchangeError) {
-                        console.error('Code exchange error:', exchangeError);
-                        throw exchangeError;
+                    if (setSessionError) {
+                        console.error('setSession error:', setSessionError);
+                        throw setSessionError;
                     }
 
                     if (data.session) {
-                        console.log('Session obtained successfully:', {
+                        console.log('✓ Session created successfully:', {
                             userId: data.session.user.id,
                             email: data.session.user.email,
                             hasProviderToken: !!data.session.provider_token
                         });
 
-                        // Store user info in localStorage
+                        // Store user info
                         const user = {
                             id: data.session.user.id,
                             email: data.session.user.email || '',
@@ -66,101 +97,122 @@ export const AuthCallback: React.FC = () => {
                         };
                         localStorage.setItem('nexus_user', JSON.stringify(user));
 
-                        // Clean up URL
+                        // Clean URL and redirect
                         window.history.replaceState(null, '', window.location.pathname + '#/squads');
-
-                        // Navigate to squads
                         setLoading(false);
                         navigate('/squads');
                         return;
                     }
-                } else if (accessToken) {
-                    console.log('Processing implicit flow with access_token...');
-
-                    // If we have an access token (implicit flow), get the current session
-                    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-                    if (sessionError) {
-                        console.error('Session retrieval error:', sessionError);
-                        throw sessionError;
-                    }
-
-                    if (session) {
-                        console.log('Session found via implicit flow:', {
-                            userId: session.user.id,
-                            email: session.user.email
-                        });
-
-                        const user = {
-                            id: session.user.id,
-                            email: session.user.email || '',
-                            name: session.user.user_metadata.full_name ||
-                                  session.user.user_metadata.name ||
-                                  session.user.email ||
-                                  'User'
-                        };
-                        localStorage.setItem('nexus_user', JSON.stringify(user));
-
-                        // Clean up URL
-                        window.history.replaceState(null, '', window.location.pathname + '#/squads');
-
-                        // Navigate to squads
-                        setLoading(false);
-                        navigate('/squads');
-                        return;
-                    }
-                } else {
-                    // No code or access_token found, try getting existing session
-                    console.log('No code or access_token found, checking for existing session...');
-
-                    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-                    if (sessionError) {
-                        console.error('Session check error:', sessionError);
-                        throw sessionError;
-                    }
-
-                    if (session) {
-                        console.log('Existing session found:', {
-                            userId: session.user.id,
-                            email: session.user.email
-                        });
-
-                        const user = {
-                            id: session.user.id,
-                            email: session.user.email || '',
-                            name: session.user.user_metadata.full_name ||
-                                  session.user.user_metadata.name ||
-                                  session.user.email ||
-                                  'User'
-                        };
-                        localStorage.setItem('nexus_user', JSON.stringify(user));
-
-                        // Clean up URL
-                        window.history.replaceState(null, '', window.location.pathname + '#/squads');
-
-                        // Navigate to squads
-                        setLoading(false);
-                        navigate('/squads');
-                        return;
-                    }
-
-                    // No session found at all
-                    throw new Error('No authentication code or session found. Please try logging in again.');
                 }
 
-                // If we get here, something went wrong
-                throw new Error('Authentication completed but no valid session was created');
+                // Strategy 2: If we have only access_token (implicit flow without refresh)
+                if (accessToken && !refreshToken) {
+                    console.log('Using setSession with access_token only...');
+
+                    try {
+                        const { data, error: setSessionError } = await supabase.auth.setSession({
+                            access_token: accessToken,
+                            refresh_token: '' // Supabase may handle this
+                        });
+
+                        if (setSessionError) throw setSessionError;
+
+                        if (data.session) {
+                            console.log('✓ Session created with access_token only');
+
+                            const user = {
+                                id: data.session.user.id,
+                                email: data.session.user.email || '',
+                                name: data.session.user.user_metadata.full_name ||
+                                      data.session.user.user_metadata.name ||
+                                      data.session.user.email ||
+                                      'User'
+                            };
+                            localStorage.setItem('nexus_user', JSON.stringify(user));
+
+                            window.history.replaceState(null, '', window.location.pathname + '#/squads');
+                            setLoading(false);
+                            navigate('/squads');
+                            return;
+                        }
+                    } catch (err) {
+                        console.warn('setSession with access_token only failed, trying PKCE...');
+                    }
+                }
+
+                // Strategy 3: If we have code, try PKCE exchange
+                if (code) {
+                    console.log('Using exchangeCodeForSession with code...');
+
+                    const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+
+                    if (exchangeError) {
+                        console.error('exchangeCodeForSession error:', exchangeError);
+                        throw exchangeError;
+                    }
+
+                    if (data.session) {
+                        console.log('✓ Session created via PKCE exchange');
+
+                        const user = {
+                            id: data.session.user.id,
+                            email: data.session.user.email || '',
+                            name: data.session.user.user_metadata.full_name ||
+                                  data.session.user.user_metadata.name ||
+                                  data.session.user.email ||
+                                  'User'
+                        };
+                        localStorage.setItem('nexus_user', JSON.stringify(user));
+
+                        window.history.replaceState(null, '', window.location.pathname + '#/squads');
+                        setLoading(false);
+                        navigate('/squads');
+                        return;
+                    }
+                }
+
+                // Strategy 4: Try to get existing session (fallback)
+                console.log('No tokens found in URL, checking for existing session...');
+
+                const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+                if (sessionError) {
+                    console.error('getSession error:', sessionError);
+                    throw sessionError;
+                }
+
+                if (session) {
+                    console.log('✓ Existing session found');
+
+                    const user = {
+                        id: session.user.id,
+                        email: session.user.email || '',
+                        name: session.user.user_metadata.full_name ||
+                              session.user.user_metadata.name ||
+                              session.user.email ||
+                              'User'
+                    };
+                    localStorage.setItem('nexus_user', JSON.stringify(user));
+
+                    window.history.replaceState(null, '', window.location.pathname + '#/squads');
+                    setLoading(false);
+                    navigate('/squads');
+                    return;
+                }
+
+                // If we get here, nothing worked
+                throw new Error('Não foi possível autenticar. Nenhum token ou código válido encontrado na URL.');
 
             } catch (err) {
-                console.error('Auth callback error:', err);
+                console.error('=== AUTH CALLBACK ERROR ===');
+                console.error('Error:', err);
                 console.error('Full error details:', {
                     message: err instanceof Error ? err.message : String(err),
                     stack: err instanceof Error ? err.stack : undefined,
                     url: window.location.href
                 });
 
-                setError(err instanceof Error ? err.message : 'Authentication failed. Please try again.');
+                setError(err instanceof Error ? err.message : 'Falha na autenticação. Tente novamente.');
                 setLoading(false);
 
                 // Redirect to login after 4 seconds
@@ -180,9 +232,10 @@ export const AuthCallback: React.FC = () => {
                 <div className="bg-red-500/10 rounded-full p-4 mb-6">
                     <div className="text-red-500 text-3xl">⚠️</div>
                 </div>
-                <h2 className="text-white text-2xl font-bold mb-3">Authentication Error</h2>
+                <h2 className="text-white text-2xl font-bold mb-3">Erro de Autenticação</h2>
                 <p className="text-slate-300 text-center max-w-md mb-2">{error}</p>
-                <p className="text-slate-500 text-sm mt-4">Redirecting to login in 4 seconds...</p>
+                <p className="text-slate-500 text-sm mt-1">Verifique o console do navegador (F12) para mais detalhes.</p>
+                <p className="text-slate-500 text-sm mt-4">Redirecionando para o login em 4 segundos...</p>
                 <button
                     onClick={() => {
                         window.history.replaceState(null, '', window.location.pathname + '#/login');
@@ -190,7 +243,7 @@ export const AuthCallback: React.FC = () => {
                     }}
                     className="mt-6 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors"
                 >
-                    Return to Login
+                    Voltar para Login
                 </button>
             </div>
         );
@@ -201,9 +254,12 @@ export const AuthCallback: React.FC = () => {
             <div className="bg-indigo-500/10 rounded-full p-6 mb-6">
                 <Loader2 className="w-12 h-12 animate-spin text-indigo-500" />
             </div>
-            <h2 className="text-white text-2xl font-bold mb-2">Completing login...</h2>
+            <h2 className="text-white text-2xl font-bold mb-2">Completando login...</h2>
             <p className="text-slate-400 text-center max-w-md">
-                {loading ? 'Processing authentication...' : 'You will be redirected in a moment.'}
+                {loading ? 'Processando autenticação...' : 'Você será redirecionado em instantes.'}
+            </p>
+            <p className="text-slate-500 text-xs mt-4">
+                Caso demore muito, verifique o console (F12) e reporte o problema.
             </p>
         </div>
     );
