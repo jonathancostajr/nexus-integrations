@@ -30,45 +30,110 @@ export const Integrations: React.FC = () => {
     if (projectId) loadIntegrations();
   }, [projectId]);
 
-  // Check if returning from OAuth and auto-fetch properties
+  // Capture OAuth tokens and save to database
   useEffect(() => {
-    const checkOAuthCallback = async () => {
+    const captureAndSaveTokens = async () => {
+      if (!projectId) return;
+
       const fullUrl = window.location.href;
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const queryParams = new URLSearchParams(window.location.search);
+
+      console.log('🔍 Checking for OAuth tokens in URL...');
 
       // Check if we have OAuth callback indicators
-      const hasCode = fullUrl.includes('code=') || fullUrl.includes('access_token=');
+      const hasOAuthCallback = fullUrl.includes('code=') ||
+                               fullUrl.includes('access_token=') ||
+                               hashParams.has('access_token') ||
+                               queryParams.has('code');
 
-      if (hasCode) {
-        console.log('🔄 Detected OAuth callback, waiting for session update...');
+      if (hasOAuthCallback) {
+        console.log('🔄 OAuth callback detected! Processing tokens...');
 
-        // Wait for session to be fully updated
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        try {
+          // Extract tokens from URL (handle multiple locations)
+          let providerToken = hashParams.get('access_token') || queryParams.get('access_token');
+          let providerRefreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
 
-        // Check if we now have Analytics permissions
-        const { data: { session } } = await supabase.auth.getSession();
+          // If tokens not in URL, wait for Supabase session to update
+          if (!providerToken) {
+            console.log('⏳ Tokens not in URL, waiting for session update...');
+            await new Promise(resolve => setTimeout(resolve, 1500));
 
-        if (session?.provider_token) {
-          console.log('✓ Session updated with provider_token, auto-fetching GA4 properties...');
-
-          // Clean up URL
-          window.history.replaceState(null, '', window.location.pathname + window.location.search + '#/projects/' + projectId + '/integrations');
-
-          // Auto-fetch GA4 properties
-          try {
-            await fetchGA4Properties();
-          } catch (err) {
-            console.error('Auto-fetch failed:', err);
-            alert('Erro ao buscar propriedades do Google Analytics. Tente novamente manualmente.');
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.provider_token) {
+              providerToken = session.provider_token;
+              providerRefreshToken = session.provider_refresh_token || '';
+              console.log('✓ Got tokens from Supabase session');
+            }
           }
-        } else {
-          console.warn('⚠️ OAuth callback detected but no provider_token in session');
+
+          if (providerToken) {
+            console.log('💾 Saving tokens to database...');
+
+            // Save tokens to integrations table (upsert)
+            const { error: upsertError } = await supabase
+              .from('integrations')
+              .upsert({
+                project_id: projectId,
+                organization_id: '40dc1851-80bb-4774-b57b-6c9a55977b92',
+                provider: 'google_analytics',
+                status: 'active',
+                metadata: {
+                  access_token: providerToken,
+                  refresh_token: providerRefreshToken,
+                  connected_at: new Date().toISOString()
+                }
+              }, {
+                onConflict: 'project_id,provider'
+              });
+
+            if (upsertError) {
+              console.error('❌ Error saving tokens:', upsertError);
+              throw upsertError;
+            }
+
+            console.log('✓ Tokens saved successfully!');
+
+            // Clean up URL immediately (remove sensitive tokens)
+            window.history.replaceState(
+              {},
+              document.title,
+              `${window.location.pathname}${window.location.search}#/projects/${projectId}/integrations`
+            );
+
+            console.log('🧹 URL cleaned');
+
+            // Reload integrations to update UI
+            await loadIntegrations();
+
+            // Auto-fetch GA4 properties to open modal
+            console.log('🚀 Auto-fetching GA4 properties...');
+            try {
+              await fetchGA4Properties();
+            } catch (err) {
+              console.error('⚠️ Auto-fetch failed:', err);
+              alert('Tokens salvos! Clique em "Connect Google Analytics 4" novamente para selecionar uma propriedade.');
+            }
+          } else {
+            console.warn('⚠️ OAuth callback detected but no tokens found');
+          }
+        } catch (error) {
+          console.error('❌ Error processing OAuth callback:', error);
+          alert('Erro ao processar autenticação. Por favor, tente conectar novamente.');
+
+          // Clean up URL even on error
+          window.history.replaceState(
+            {},
+            document.title,
+            `${window.location.pathname}${window.location.search}#/projects/${projectId}/integrations`
+          );
         }
       }
     };
 
-    if (projectId) {
-      checkOAuthCallback();
-    }
+    // Run on mount
+    captureAndSaveTokens();
   }, [projectId]);
 
   const loadIntegrations = async () => {
@@ -106,18 +171,40 @@ export const Integrations: React.FC = () => {
   const fetchGA4Properties = async () => {
     setFetchingProperties(true);
     try {
-      // Get current session to extract provider_token
-      const { data: { session } } = await supabase.auth.getSession();
+      // Try to get token from database first
+      let accessToken: string | null = null;
 
-      if (!session?.provider_token) {
-        alert('Token de acesso não encontrado. Por favor, faça logout e login novamente para renovar as permissões do Google.');
+      // Check if we have saved tokens in integrations table
+      const { data: existingIntegration } = await supabase
+        .from('integrations')
+        .select('metadata')
+        .eq('project_id', projectId)
+        .eq('provider', 'google_analytics')
+        .single();
+
+      if (existingIntegration?.metadata?.access_token) {
+        console.log('✓ Using token from database');
+        accessToken = existingIntegration.metadata.access_token;
+      } else {
+        // Fallback to session provider_token
+        console.log('⚠️ No token in database, trying session...');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.provider_token) {
+          console.log('✓ Using token from session');
+          accessToken = session.provider_token;
+        }
+      }
+
+      if (!accessToken) {
+        alert('Token de acesso não encontrado. Por favor, conecte sua conta Google Analytics novamente.');
         return;
       }
 
       // Fetch GA4 properties from Google Analytics Admin API
+      console.log('📊 Fetching GA4 properties from API...');
       const response = await fetch('https://analyticsadmin.googleapis.com/v1beta/accountSummaries', {
         headers: {
-          'Authorization': `Bearer ${session.provider_token}`,
+          'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json'
         }
       });
