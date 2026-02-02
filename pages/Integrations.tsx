@@ -30,111 +30,9 @@ export const Integrations: React.FC = () => {
     if (projectId) loadIntegrations();
   }, [projectId]);
 
-  // Capture OAuth tokens and save to database
-  useEffect(() => {
-    const captureAndSaveTokens = async () => {
-      if (!projectId) return;
-
-      const fullUrl = window.location.href;
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-      const queryParams = new URLSearchParams(window.location.search);
-
-      console.log('🔍 Checking for OAuth tokens in URL...');
-
-      // Check if we have OAuth callback indicators
-      const hasOAuthCallback = fullUrl.includes('code=') ||
-                               fullUrl.includes('access_token=') ||
-                               hashParams.has('access_token') ||
-                               queryParams.has('code');
-
-      if (hasOAuthCallback) {
-        console.log('🔄 OAuth callback detected! Processing tokens...');
-
-        try {
-          // Extract tokens from URL (handle multiple locations)
-          let providerToken = hashParams.get('access_token') || queryParams.get('access_token');
-          let providerRefreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
-
-          // If tokens not in URL, wait for Supabase session to update
-          if (!providerToken) {
-            console.log('⏳ Tokens not in URL, waiting for session update...');
-            await new Promise(resolve => setTimeout(resolve, 1500));
-
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session?.provider_token) {
-              providerToken = session.provider_token;
-              providerRefreshToken = session.provider_refresh_token || '';
-              console.log('✓ Got tokens from Supabase session');
-            }
-          }
-
-          if (providerToken) {
-            console.log('💾 Saving tokens to database...');
-
-            // Save tokens to integrations table (upsert)
-            const { error: upsertError } = await supabase
-              .from('integrations')
-              .upsert({
-                project_id: projectId,
-                organization_id: '40dc1851-80bb-4774-b57b-6c9a55977b92',
-                provider: 'google_analytics',
-                status: 'active',
-                metadata: {
-                  access_token: providerToken,
-                  refresh_token: providerRefreshToken,
-                  connected_at: new Date().toISOString()
-                }
-              }, {
-                onConflict: 'project_id,provider'
-              });
-
-            if (upsertError) {
-              console.error('❌ Error saving tokens:', upsertError);
-              throw upsertError;
-            }
-
-            console.log('✓ Tokens saved successfully!');
-
-            // Clean up URL immediately (remove sensitive tokens)
-            window.history.replaceState(
-              {},
-              document.title,
-              `${window.location.pathname}${window.location.search}#/projects/${projectId}/integrations`
-            );
-
-            console.log('🧹 URL cleaned');
-
-            // Reload integrations to update UI
-            await loadIntegrations();
-
-            // Auto-fetch GA4 properties to open modal
-            console.log('🚀 Auto-fetching GA4 properties...');
-            try {
-              await fetchGA4Properties();
-            } catch (err) {
-              console.error('⚠️ Auto-fetch failed:', err);
-              alert('Tokens salvos! Clique em "Connect Google Analytics 4" novamente para selecionar uma propriedade.');
-            }
-          } else {
-            console.warn('⚠️ OAuth callback detected but no tokens found');
-          }
-        } catch (error) {
-          console.error('❌ Error processing OAuth callback:', error);
-          alert('Erro ao processar autenticação. Por favor, tente conectar novamente.');
-
-          // Clean up URL even on error
-          window.history.replaceState(
-            {},
-            document.title,
-            `${window.location.pathname}${window.location.search}#/projects/${projectId}/integrations`
-          );
-        }
-      }
-    };
-
-    // Run on mount
-    captureAndSaveTokens();
-  }, [projectId]);
+  // No longer needed - OAuth tokens are handled by IntegrationsCallback route
+  // This component just displays integrations and allows connection
+  // When returning from OAuth, IntegrationsCallback saves tokens and redirects here
 
   const loadIntegrations = async () => {
     if (!projectId) return;
@@ -319,7 +217,8 @@ export const Integrations: React.FC = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/#/projects/${projectId}/integrations`,
+          // NEW: Redirect to dedicated callback route with project ID in query params
+          redirectTo: `${window.location.origin}/#/integrations/callback?project=${projectId}`,
           queryParams: {
             access_type: 'offline',
             prompt: 'consent', // Force consent screen to get refresh token
@@ -333,7 +232,7 @@ export const Integrations: React.FC = () => {
         console.error('❌ Error requesting Analytics permissions:', error);
         alert('Erro ao solicitar permissões do Google Analytics. Tente novamente.');
       } else {
-        console.log('✓ OAuth redirect initiated...');
+        console.log('✓ OAuth redirect initiated to callback route...');
       }
       // User will be redirected to Google OAuth consent screen
     } catch (error) {

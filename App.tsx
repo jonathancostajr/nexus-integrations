@@ -6,6 +6,7 @@ import { Squads } from './pages/Squads';
 import { Projects } from './pages/Projects';
 import { Integrations } from './pages/Integrations';
 import { AuthCallback } from './pages/AuthCallback';
+import { IntegrationsCallback } from './pages/IntegrationsCallback';
 
 // Protected Route Wrapper
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -22,6 +23,7 @@ const App: React.FC = () => {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/integrations/callback" element={<IntegrationsCallback />} />
 
         {/* Protected Routes inside Layout */}
         <Route element={
