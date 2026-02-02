@@ -30,6 +30,31 @@ export const Integrations: React.FC = () => {
     if (projectId) loadIntegrations();
   }, [projectId]);
 
+  // Check if returning from OAuth and auto-fetch properties
+  useEffect(() => {
+    const checkOAuthCallback = async () => {
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const hasCode = hashParams.has('code');
+
+      if (hasCode) {
+        // Wait a bit for session to be updated
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Check if we now have Analytics permissions
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.provider_token) {
+          // Clear the hash
+          window.history.replaceState(null, '', window.location.pathname + window.location.search + '#/projects/' + projectId + '/integrations');
+
+          // Auto-fetch GA4 properties
+          await fetchGA4Properties();
+        }
+      }
+    };
+
+    checkOAuthCallback();
+  }, [projectId]);
+
   const loadIntegrations = async () => {
     if (!projectId) return;
     try {
@@ -82,6 +107,8 @@ export const Integrations: React.FC = () => {
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`GA4 API Error (${response.status}):`, errorText);
         throw new Error(`Failed to fetch GA4 properties: ${response.status}`);
       }
 
@@ -110,7 +137,9 @@ export const Integrations: React.FC = () => {
       setIsGA4ModalOpen(true);
     } catch (error) {
       console.error('Error fetching GA4 properties:', error);
-      alert('Erro ao buscar propriedades do Google Analytics. Verifique as permissões e tente novamente.');
+      setFetchingProperties(false);
+      // Re-throw to let handleConnect catch it and request permissions
+      throw error;
     } finally {
       setFetchingProperties(false);
     }
@@ -178,11 +207,53 @@ export const Integrations: React.FC = () => {
     }
   };
 
+  const requestAnalyticsPermissions = async () => {
+    try {
+      // Initiate OAuth flow with Analytics scopes
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/#/projects/${projectId}/integrations`,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent', // Force consent screen to get refresh token
+            scope: 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/adwords'
+          }
+        }
+      });
+
+      if (error) {
+        console.error('Error requesting Analytics permissions:', error);
+        alert('Erro ao solicitar permissões do Google Analytics. Tente novamente.');
+      }
+      // User will be redirected to Google OAuth consent screen
+    } catch (error) {
+      console.error('Error initiating OAuth:', error);
+      alert('Erro ao iniciar autenticação. Tente novamente.');
+    }
+  };
+
   const handleConnect = async (type: IntegrationType) => {
     setActionLoading(type);
     try {
       if (type === 'ga4') {
-        await fetchGA4Properties();
+        // Check if we already have a valid token with Analytics permissions
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (!session?.provider_token) {
+          // No token at all - request permissions
+          await requestAnalyticsPermissions();
+          return;
+        }
+
+        // Try to fetch properties - if it fails, request permissions
+        try {
+          await fetchGA4Properties();
+        } catch (error) {
+          // If fetch fails, likely need to request permissions
+          console.log('Fetching properties failed, requesting permissions...');
+          await requestAnalyticsPermissions();
+        }
       } else {
         alert(`Integração ${type} em desenvolvimento!`);
       }
