@@ -33,26 +33,42 @@ export const Integrations: React.FC = () => {
   // Check if returning from OAuth and auto-fetch properties
   useEffect(() => {
     const checkOAuthCallback = async () => {
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-      const hasCode = hashParams.has('code');
+      const fullUrl = window.location.href;
+
+      // Check if we have OAuth callback indicators
+      const hasCode = fullUrl.includes('code=') || fullUrl.includes('access_token=');
 
       if (hasCode) {
-        // Wait a bit for session to be updated
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        console.log('🔄 Detected OAuth callback, waiting for session update...');
+
+        // Wait for session to be fully updated
+        await new Promise(resolve => setTimeout(resolve, 1500));
 
         // Check if we now have Analytics permissions
         const { data: { session } } = await supabase.auth.getSession();
+
         if (session?.provider_token) {
-          // Clear the hash
+          console.log('✓ Session updated with provider_token, auto-fetching GA4 properties...');
+
+          // Clean up URL
           window.history.replaceState(null, '', window.location.pathname + window.location.search + '#/projects/' + projectId + '/integrations');
 
           // Auto-fetch GA4 properties
-          await fetchGA4Properties();
+          try {
+            await fetchGA4Properties();
+          } catch (err) {
+            console.error('Auto-fetch failed:', err);
+            alert('Erro ao buscar propriedades do Google Analytics. Tente novamente manualmente.');
+          }
+        } else {
+          console.warn('⚠️ OAuth callback detected but no provider_token in session');
         }
       }
     };
 
-    checkOAuthCallback();
+    if (projectId) {
+      checkOAuthCallback();
+    }
   }, [projectId]);
 
   const loadIntegrations = async () => {
@@ -209,7 +225,10 @@ export const Integrations: React.FC = () => {
 
   const requestAnalyticsPermissions = async () => {
     try {
-      // Initiate OAuth flow with Analytics scopes
+      console.log('🔐 Requesting Analytics permissions with identity scopes...');
+
+      // CRITICAL: Include identity scopes (openid profile email) along with data scopes
+      // This ensures Google sends user profile information, preventing Supabase auth errors
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -217,18 +236,21 @@ export const Integrations: React.FC = () => {
           queryParams: {
             access_type: 'offline',
             prompt: 'consent', // Force consent screen to get refresh token
-            scope: 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/adwords'
+            // MAGIC SCOPE STRING: Identity + Analytics + Ads
+            scope: 'openid profile email https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/adwords'
           }
         }
       });
 
       if (error) {
-        console.error('Error requesting Analytics permissions:', error);
+        console.error('❌ Error requesting Analytics permissions:', error);
         alert('Erro ao solicitar permissões do Google Analytics. Tente novamente.');
+      } else {
+        console.log('✓ OAuth redirect initiated...');
       }
       // User will be redirected to Google OAuth consent screen
     } catch (error) {
-      console.error('Error initiating OAuth:', error);
+      console.error('❌ Error initiating OAuth:', error);
       alert('Erro ao iniciar autenticação. Tente novamente.');
     }
   };
@@ -237,21 +259,41 @@ export const Integrations: React.FC = () => {
     setActionLoading(type);
     try {
       if (type === 'ga4') {
-        // Check if we already have a valid token with Analytics permissions
+        console.log('🚀 Starting GA4 connection flow...');
+
+        // Step 1: Check if we already have a session with provider_token
         const { data: { session } } = await supabase.auth.getSession();
 
         if (!session?.provider_token) {
-          // No token at all - request permissions
+          console.log('❌ No provider_token found, requesting permissions...');
           await requestAnalyticsPermissions();
           return;
         }
 
-        // Try to fetch properties - if it fails, request permissions
+        console.log('✓ Found provider_token, testing GA4 API access...');
+
+        // Step 2: Smart Verification - Test if token has Analytics permissions
         try {
-          await fetchGA4Properties();
+          const testResponse = await fetch('https://analyticsadmin.googleapis.com/v1beta/accountSummaries', {
+            headers: {
+              'Authorization': `Bearer ${session.provider_token}`,
+              'Content-Type': 'application/json'
+            }
+          });
+
+          if (testResponse.ok) {
+            console.log('✓ Token has Analytics permissions! Fetching properties...');
+            // Token works - fetch properties directly
+            await fetchGA4Properties();
+            return;
+          } else {
+            console.log(`⚠️ Token test failed (${testResponse.status}), requesting new permissions...`);
+            // Token doesn't have Analytics permissions - request them
+            await requestAnalyticsPermissions();
+          }
         } catch (error) {
-          // If fetch fails, likely need to request permissions
-          console.log('Fetching properties failed, requesting permissions...');
+          console.error('⚠️ Token test error:', error);
+          // Network error or other issue - request permissions
           await requestAnalyticsPermissions();
         }
       } else {
