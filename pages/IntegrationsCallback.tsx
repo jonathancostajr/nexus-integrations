@@ -26,7 +26,23 @@ export const IntegrationsCallback: React.FC = () => {
         console.log('✓ Squad ID:', squadId);
         console.log('✓ Project ID:', projectId);
 
-        // 2. Extrai tokens do hash da URL (Google OAuth retorna no hash)
+        // 2. CRÍTICO: Buscar organization_id do projeto
+        console.log('🔍 Fetching project organization...');
+        const { data: projectData, error: projectError } = await supabase
+          .from('projects')
+          .select('organization_id')
+          .eq('id', projectId)
+          .single();
+
+        if (projectError || !projectData) {
+          console.error('❌ Error fetching project:', projectError);
+          throw new Error('Projeto não encontrado no banco de dados.');
+        }
+
+        const organizationId = projectData.organization_id;
+        console.log('✓ Organization ID:', organizationId);
+
+        // 3. Extrai tokens do hash da URL (Google OAuth retorna no hash)
         // Formato: #access_token=...&refresh_token=...&expires_in=...
         const hash = window.location.hash.substring(1);
         const hashParams = new URLSearchParams(hash);
@@ -63,14 +79,19 @@ export const IntegrationsCallback: React.FC = () => {
         console.log('✓ Access token found');
         setMessage('Salvando credenciais no banco de dados...');
 
-        // 3. Salva tokens na tabela integrations (upsert)
+        // 4. Salva tokens na tabela integrations (upsert)
         console.log('💾 Saving tokens to database...');
+        console.log('📋 Save data:', {
+          project_id: projectId,
+          organization_id: organizationId,
+          provider: 'google_analytics'
+        });
 
         const { error: upsertError } = await supabase
           .from('integrations')
           .upsert({
             project_id: projectId,
-            organization_id: '40dc1851-80bb-4774-b57b-6c9a55977b92',
+            organization_id: organizationId, // ✨ DINÂMICO - busca do projeto!
             provider: 'google_analytics',
             status: 'active',
             metadata: {
@@ -89,7 +110,7 @@ export const IntegrationsCallback: React.FC = () => {
 
         console.log('✓ Tokens saved successfully!');
 
-        // 4. Sucesso!
+        // 5. Sucesso!
         setStatus('success');
         setMessage('Google Analytics conectado com sucesso!');
 
@@ -122,11 +143,25 @@ export const IntegrationsCallback: React.FC = () => {
       try {
         setMessage('Salvando credenciais da sessão...');
 
+        // Buscar organization_id do projeto
+        const { data: projectData, error: projectError } = await supabase
+          .from('projects')
+          .select('organization_id')
+          .eq('id', projectId)
+          .single();
+
+        if (projectError || !projectData) {
+          throw new Error('Projeto não encontrado no banco de dados.');
+        }
+
+        const organizationId = projectData.organization_id;
+        console.log('✓ Organization ID from session:', organizationId);
+
         const { error: upsertError } = await supabase
           .from('integrations')
           .upsert({
             project_id: projectId,
-            organization_id: '40dc1851-80bb-4774-b57b-6c9a55977b92',
+            organization_id: organizationId, // ✨ DINÂMICO!
             provider: 'google_analytics',
             status: 'active',
             metadata: {
