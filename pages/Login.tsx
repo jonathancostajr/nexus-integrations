@@ -17,8 +17,8 @@ export const Login: React.FC = () => {
           queryParams: {
             access_type: 'offline',
             prompt: 'consent',
-            // Solicita permissões do Google Analytics (chave para GA4)
-            scope: 'https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/analytics.manage.users.readonly'
+            // Basic authentication scopes only
+            scope: 'openid profile email'
           }
         }
       });
